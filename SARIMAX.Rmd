@@ -1,0 +1,178 @@
+---
+title: "project"
+author: "Yimei Chen"
+date: "11/21/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(forecast)
+library(tseries)
+```
+
+
+```{r cars}
+#load the data and split into training, validation and test set
+data <- read.csv("data/train.csv")
+train <- data[1:264,]
+valid <- data[265:288, ]
+test <- read.csv("data/test.csv")
+unem <- ts(train$Unemployment_Rate, start = c(1987, 1), end = c(2008, 12), frequency=12)
+pop <- ts(train$Population, start = c(1987, 1), end = c(2008, 12), frequency=12)
+house <- ts(train$House_Price_Index, start = c(1987, 1), end = c(2008, 12), frequency=12)
+y <- ts(train[4], start = c(1987, 1), end = c(2008, 12), frequency=12)
+
+val.unem <- ts(valid[c(2)], start = c(2009, 1), end = c(2010, 12), frequency=12)
+val.pop <- ts(valid[c(3)], start = c(2009, 1), end = c(2010, 12), frequency=12)
+val.house <-  ts(valid[c(5)], start = c(2009, 1), end = c(2010, 12), frequency=12)
+valid_y <- ts(valid[4], start = c(2009, 1), end = c(2010, 12), frequency=12)
+
+#define the rmse function
+rmse <- function(m,val_y, df){
+  e <- sqrt(mean((exp(forecast(m, h = 24, xreg = df)$mean) - val_y)^2))
+  return(e)
+}
+
+```
+
+
+```{r}
+#create the dataframe for all possible multivariate combinations
+df1.tr <- data.frame(u = unem)
+df2.tr <- data.frame(h = house)
+df3.tr <- data.frame(p = pop)
+df4.tr <- data.frame(u = unem, h = house)
+df5.tr <- data.frame(u = unem, p = pop)
+df6.tr <- data.frame(h = house,p =  pop)
+df7.tr <- data.frame(h = house, p = pop, u = unem)
+df.tr <- c(df1.tr,df2.tr,df3.tr,df4.tr,df5.tr,df6.tr,df7.tr)
+
+df1.val <- data.frame(u = val.unem)
+df2.val <- data.frame(h = val.house)
+df3.val <- data.frame(p = val.pop)
+df4.val <- data.frame(u = val.unem, h = val.house)
+df5.val <- data.frame(u = val.unem, p = val.pop)
+df6.val <- data.frame(h = val.house,p =  val.pop)
+df7.val <- data.frame(h = val.house, p = val.pop, u= val.unem)
+df.val <- c(df1.val,df2.val,df3.val,df4.val,df5.val,df6.val,df7.val)
+
+```
+
+
+```{r}
+#try sarimax (2,1,1)(1,0,0)[12] multivariate model
+rmse_1 <- c()
+for (i in 1:7){
+  m_temp <- arima(log(y), order = c(2,1,1), seasonal = list(order = c(1,0,0), period = 12), xreg = df.tr[[i]], method = "CSS-ML")
+  rmse_1[i] <- rmse(m_temp, valid_y, df.val[[i]])
+}
+```
+
+
+```{r}
+#try sarimax (2,1,1)(1,2,1)[60] multivariate model to 
+rmse_2 <- c()
+for (i in 1:7){
+  m_temp <- arima(log(y), order = c(2,1,1), seasonal = list(order = c(1,2,1), period = 12), xreg = df.tr[[i]], method = "CSS-ML")
+  rmse_2[i] <- rmse(m_temp, valid_y, df.val[[i]])
+}
+```
+
+```{r}
+rmse_3 <- c()
+for (i in 1:7){
+  m_temp <- arima(log(y), order = c(4,1,0), seasonal = list(order = c(1,0,0), period = 12), xreg = df.tr[[i]], method = "CSS-ML")
+  rmse_3[i] <- rmse(m_temp, valid_y, df.val[[i]])
+}
+```
+
+```{r}
+rmse_4 <- c()
+for (i in 1:7){
+  m_temp <- arima(log(y), order = c(2,1,3), seasonal = list(order = c(1,1,3), period = 12), xreg = df.tr[[i]], method = "CSS-ML")
+  rmse_4[i] <- rmse(m_temp, valid_y, df.val[[i]])
+}
+```
+
+```{r}
+rmse <- c(rmse_1, rmse_2, rmse_3, rmse_4)
+print(which.min(rmse))
+```
+
+```{r}
+print(rmse[15])
+```
+
+So the optimal model found so far is (2,1,3)(1,1,3)[12] with unemployment rate as the multivariate variable. 
+
+```{r}
+plot(ts(data$Bankruptcy_Rate, start = c(1987, 1), end = c(2010, 12), frequency=12))
+```
+
+```{r}
+m.best <- arima(log(y), order = c(2,1,3), seasonal = list(order = c(1,1,3), period = 12), xreg = df.tr[[1]], method = "CSS-ML")
+f.arimax <- forecast(m.best, h = 24, xreg = df.val[[1]])
+```
+
+```{r}
+val <- read.csv("VAR_validation.csv")$fcst
+combined <- ts((val+exp(f.arimax$mean))/2, start = 2011, end = c(2012,12), frequency = 12)
+sqrt(mean((combined - valid_y)^2))
+
+
+```
+
+```{r}
+# Prediction vs. Test set data plot
+bankruptcy_rate <- ts(data$Bankruptcy_Rate, start = 1987, end = c(2010,12), frequency = 12)
+par(mfrow = c(1,1))
+t.new <- seq(2011,2013,length=25)[1:24]
+plot(bankruptcy_rate, xlim=c(1987,2012),ylim=c(0,0.06), main='SARIMAX Bankrupcy Rate Prediction', ylab='%', xlab='Year') #plotting the data
+abline(v=20010,col='blue',lty=2) # adding a vertical line at the point where prediction starts
+lines(exp(f.arimax$mean),type='l',col='red')# plotting the predict
+lines(exp(f.arimax$lower[,2]),col='green') # plotting lower limit of the prediction interval
+lines(exp(f.arimax$upper[,2]),col='green') # plotting upper limit of the  prediction interval
+legend("topleft", legend=c("Test Set data", "Prediction", "95% Prediction Interval"),col=c("black", "red", "green"), lty=1, cex=0.8)
+
+```
+
+```{r}
+#re-fit the model with all the data and generate prediction
+unemp_train <- ts(data$Unemployment_Rate, start = 1987, end = c(2010,12), frequency = 12)
+new_model <- arima(log(bankruptcy_rate), order = c(2,1,3), seasonal = list(order = c(1,1,3), period = 12), xreg = data.frame(unemp_train), method = "CSS-ML")
+unemp_test <- ts(test$Unemployment_Rate, start = 2010, end = c(2011,12), frequency = 12)
+final_pred <- forecast(m.best, h = 24, xreg = data.frame(unemp_test))
+mean.sarimax <- final_pred$mean
+max.sarimax <- final_pred$upper[,2]
+min.sarimax <- final_pred$lower[,2]
+```
+
+```{r}
+#load the val prediction result with all training data
+var_pred <- read.csv("VAR_pred_final.csv")
+mean.var <- var_pred$fcst
+min.var <- var_pred$lower
+max.var <- var_pred$upper
+```
+
+```{r}
+#combine the prediction
+c_mean <- (exp(mean.sarimax) + mean.var)/2
+c_min <- (exp(min.sarimax) + min.var)/2
+c_max <- (exp(max.sarimax) + max.var)/2
+```
+
+```{r}
+# Prediction
+bankruptcy_rate <- ts(data$Bankruptcy_Rate, start = 1987, end = c(2010,12), frequency = 12)
+par(mfrow = c(1,1))
+t.new <- seq(2011,2013,length=25)[1:24]
+plot(bankruptcy_rate, xlim=c(1987,2012),ylim=c(0,0.06), main='Ensembled Prediction', ylab='%', xlab='Year') #plotting the data
+abline(v=2011,col='blue',lty=2) # adding a vertical line at the point where prediction starts
+lines(c_mean ~ t.new,type='l',col='red')# plotting the predict
+lines(c_min ~ t.new,col='green') # plotting lower limit of the prediction interval
+lines(c_max ~ t.new,col='green') # plotting upper limit of the  prediction interval
+legend("topleft", legend=c("Test Set data", "Prediction", "95% Prediction Interval"),col=c("black", "red", "green"), lty=1, cex=0.8)
+```
+
